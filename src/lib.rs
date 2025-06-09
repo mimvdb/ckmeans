@@ -141,9 +141,8 @@ fn fill_matrices<T: CkNum>(
     matrix: &mut Vec<Vec<T>>,
     backtrack_matrix: &mut Vec<Vec<T>>,
     nclusters: usize,
-) -> Option<()>
-where
-{
+    min_improvement: T,
+) -> Option<usize> {
     let nvalues = data.len();
     let mut sumx: Vec<T> = vec![T::zero(); nvalues];
     let mut sumxsq: Vec<T> = vec![T::zero(); nvalues];
@@ -177,8 +176,12 @@ where
             &sumx,
             &sumxsq,
         )?;
+
+        if matrix[k - 1][nvalues - 1] - matrix[k][nvalues - 1] < min_improvement {
+            return Some(k);
+        }
     }
-    Some(())
+    Some(nclusters)
 }
 
 /// Minimizing the difference within groups – what Wang & Song refer to as
@@ -251,8 +254,14 @@ pub fn ckmeans<T: CkNum>(data: &[T], nclusters: u8) -> Result<Vec<Vec<T>>, Ckmea
     // within-cluster sum of squares. It's similar to linear regression
     // in this way, and this calculation incrementally computes the
     // sum of squares that are later read.
-    fill_matrices(&sorted, &mut matrix, &mut backtrack_matrix, nclusters)
-        .ok_or(CkmeansErr::ConversionError)?;
+    fill_matrices(
+        &sorted,
+        &mut matrix,
+        &mut backtrack_matrix,
+        nclusters,
+        T::zero(),
+    )
+    .ok_or(CkmeansErr::ConversionError)?;
 
     // The real work of Ckmeans clustering happens in the matrix generation:
     // the generated matrices encode all possible clustering combinations, and
@@ -278,6 +287,46 @@ pub fn ckmeans<T: CkNum>(data: &[T], nclusters: u8) -> Result<Vec<Vec<T>>, Ckmea
     }
     clusters.reverse();
     Ok(clusters)
+}
+
+pub fn ckmeans_dynamic_stop<T: CkNum>(
+    data: &[T],
+    nclusters: u8,
+    min_improvement: T,
+) -> Result<Vec<Vec<T>>, CkmeansErr> {
+    if nclusters == 0 {
+        return Err(CkmeansErr::TooFewClassesError);
+    }
+    if nclusters as usize > data.len() {
+        return Err(CkmeansErr::TooManyClassesError);
+    }
+    let nvalues = data.len();
+    let mut sorted = numeric_sort(data);
+    // we'll use this as the maximum number of clusters
+    let unique_count = unique_count_sorted(&mut sorted);
+    let nclusters = unique_count.min(nclusters as usize);
+
+    // named 'S' originally
+    let mut matrix = make_matrix(nclusters, nvalues);
+    // named 'J' originally
+    let mut backtrack_matrix = matrix.clone();
+
+    // This is a dynamic programming approach to solving the problem of minimizing
+    // within-cluster sum of squares. It's similar to linear regression
+    // in this way, and this calculation incrementally computes the
+    // sum of squares that are later read.
+    let nclusters = fill_matrices(
+        &sorted,
+        &mut matrix,
+        &mut backtrack_matrix,
+        nclusters,
+        min_improvement,
+    )
+    .ok_or(CkmeansErr::ConversionError)?;
+
+    matrix.truncate(nclusters);
+
+    Ok(matrix)
 }
 
 /// The boundaries of the classes returned by [ckmeans] are "ugly" in the sense that the values
